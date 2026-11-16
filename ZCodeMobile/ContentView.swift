@@ -5,7 +5,6 @@ struct ContentView: View {
     @EnvironmentObject var store: SessionStore
     @State private var showScanner = false
     @State private var showManualInput = false
-    @State private var manualLink = ""
 
     var body: some View {
         NavigationStack {
@@ -61,16 +60,64 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showScanner) { ScannerSheet() }
-            .alert("输入链接", isPresented: $showManualInput) {
-                TextField("https://zcode.z.ai/remote/v4?...", text: $manualLink)
-                Button("添加") {
-                    if let s = LinkParser.parse(manualLink) { store.add(s) }
-                    manualLink = ""
+            .sheet(isPresented: $showManualInput) { ManualInputSheet() }
+        }
+    }
+}
+
+/// 手动输入链接：Form 弹层替代 alert（alert 内 TextField 会竖向裁切文字）
+struct ManualInputSheet: View {
+    @EnvironmentObject var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var link = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://zcode.z.ai/remote/v4?sid=...",
+                              text: $link,
+                              axis: .vertical)
+                        .lineLimit(3...6)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .font(.body.monospaced())
+                } header: {
+                    Text("桌面端「移动远程控制」面板复制的链接")
                 }
-                Button("取消", role: .cancel) { manualLink = "" }
-            } message: {
-                Text("粘贴桌面端「移动远程控制」面板复制的链接")
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
+                Section {
+                    Button {
+                        if let s = LinkParser.parse(link) {
+                            store.add(s)
+                            dismiss()
+                        } else {
+                            errorMessage = "无法识别：链接需要包含 /remote/ 路径"
+                        }
+                    } label: {
+                        Text("添加连接")
+                            .frame(maxWidth: .infinity)
+                            .bold()
+                    }
+                    .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
+            .navigationTitle("输入链接")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 }

@@ -23,8 +23,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.deltrivx.zcodemobile
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Automatic
