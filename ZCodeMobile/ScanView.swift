@@ -8,7 +8,7 @@ struct ScanView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
         let scanner = DataScannerViewController(
-            recognizedDataTypes: [.barcode(qrCode: true)],
+            recognizedDataTypes: [.barcode(symbologies: [.qr])],
             qualityAdjustmentMode: .auto,
             isHighlightingEnabled: true,
             isPinchToZoomEnabled: true
