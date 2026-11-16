@@ -1,14 +1,13 @@
 # Xcode
 build/
 DerivedData/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+*.xcodeproj
+*.xcworkspace
 xcuserdata/
+*.xcuserstate
 
 # Swift Package Manager
 .build/
-Packages/
-Package.pins
 Package.resolved
 
 # CocoaPods

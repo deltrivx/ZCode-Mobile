@@ -1,148 +1,148 @@
 # ZCode Mobile
 
-> iOS 客户端：在 App 内通过 **扫码 / 手动输入链接** 远程连接 ZCode 官方桌面客户端，支持 **同时连接多个客户端并自由切换**。以未签名 IPA 形式分发，用户自行签名安装。
+> iOS 客户端：在 App 内通过 **扫码 / 输入链接** 远程连接 ZCode 官方桌面客户端，支持 **同时管理多个客户端、自由切换**。产出未签名 IPA，自签安装。
+
+仓库状态：**脚手架 + CI 已就绪**，push 即自动构建未签名 IPA。
 
 ---
 
-## 一、项目目标
+## 一、实测结论（2026-11-16，基于真实抓取）
 
-| 能力 | 说明 |
-|---|---|
-| 扫码连接 | 扫描 ZCode 桌面端展示的二维码，直接在 App 内建立远程连接（不走浏览器网页） |
-| 链接连接 | 手动输入/粘贴链接，配合剪贴板检测自动识别 |
-| 多客户端管理 | 同时保持多个桌面客户端的连接，列表式管理、随时切换 |
-| 等同功能 | 官方网页远控具备的能力（会话交互、任务查看等）在 App 内一致可用 |
-| 分发 | 产出未签名 IPA，支持 AltStore / Sideloadly / 证书自签等安装方式 |
+对桌面端 ZCode 3.18.2 的「移动远程控制」功能实测（Chrome 打开官方提供的链接，逐项验证）：
 
----
+### 1. 二维码内容 = 一条 HTTPS 链接
 
-## 二、可行性结论
-
-**总体可行**，且有一条"零协议风险"的保底路线。核心判断依据：
-
-1. 官方流程本身就是 **网页（HTTP/WebSocket）远程连接** 桌面端——浏览器能做到的，iOS App 里的 `WKWebView` 同样能做到；这是功能对齐的硬保底。
-2. WebSocket 天然支持一个 App 同时持有 **多条并发连接**，iOS 系统层面没有"只能连一个"的限制。
-3. 二维码扫描（VisionKit / AVFoundation）、多会话管理、自动重连均为 iOS 成熟能力，无技术禁区。
-4. 唯一的不确定项是 **配对协议细节**（二维码内容格式、握手鉴权、消息结构），已列入 Phase 0 用抓包解决；即使逆向失败，WebView 路线也完全不依赖协议细节。
-
-**已确认的官方基础设施**（来自对桌面端安装包的静态分析）：
-- 服务域名族：`https://zcode.z.ai`、`https://zcode.chatglm.site`（Web 端入口）
-- OAuth 端点：`https://zcode.z.ai/api/v1/oauth/token`
-- 桌面端内置 `remote-project` / 设备绑定（`bindHost`）与"选择远程连接"等能力，远控链路大概率经由官方中继（而非仅局域网直连），意味着手机在任意网络下都能连回桌面端——这对 App 是利好。
-
----
-
-## 三、技术路线对比（三选一）
-
-| 路线 | 做法 | 优点 | 缺点 | 结论 |
-|---|---|---|---|---|
-| A. 纯 WebView 壳 | 每个会话一个 `WKWebView`，加载扫码得到的官方远控页面 | 开发最快（1~2 周）；协议变更零影响；功能与官方网页 100% 对齐 | 体验偏网页；多 WebView 内存偏大；后台行为受 WebView 限制 | **作为 M1 快速落地** |
-| B. 纯原生 WebSocket | 抓包逆向协议，`URLSessionWebSocketTask` + 全原生 SwiftUI 界面 | 体验最佳；多会话最轻量；可做通知/角标 | 逆向周期长；官方升级协议就要跟修；维护成本高 | 作为 **长期方向**，不作为起步 |
-| C. 混合（推荐） | 原生壳负责：扫码、会话管理、状态机、重连；每个会话的"工作区"用 WKWebView 渲染官方页面；高频操作后续逐步原生化 | 兼顾速度与体验；协议无关 + 原生多会话管理两全 | 多 WebView 内存管理需要做（缓存池/按需挂起） | ✅ **采用** |
-
----
-
-## 四、推荐架构（路线 C）
+桌面端左下角 📱 图标 → 弹出「移动远程控制」面板 →「复制链接」，内容形如：
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  ZCode Mobile (SwiftUI)         │
-│                                                 │
-│  ┌──────────────┐   ┌─────────────────────────┐  │
-│  │ ScanView     │   │ SessionListView         │  │
-│  │ (VisionKit)  │──▶│ - 会话卡片: 名称/状态/预览 │  │
-│  │ 链接输入框    │   │ - 新建连接 / 长按管理     │  │
-│  └──────────────┘   └───────────┬─────────────┘  │
-│                                 │ 切换            │
-│  ┌──────────────────────────────▼──────────────┐ │
-│  │ SessionManager (actor)                      │ │
-│  │ - sessions: [UUID: Session]                 │ │
-│  │ - 状态机: idle→connecting→authed→active     │ │
-│  │          →suspended→reconnecting            │ │
-│  │ - 前后台监听 → 自动挂起/重连                  │ │
-│  └──────┬───────────────┬──────────────┬───────┘ │
-│         │               │              │         │
-│   ┌─────▼────┐   ┌─────▼────┐   ┌─────▼────┐    │
-│   │Session 1 │   │Session 2 │   │Session N │    │
-│   │WKWebView │   │WKWebView │   │WKWebView │    │
-│   └──────────┘   └──────────┘   └──────────┘    │
-│                                                 │
-│  Keychain: 保存各客户端的 token（敏感信息）        │
-│  SwiftData/UserDefaults: 会话别名、历史          │
-└─────────────────────────────────────────────────┘
+https://zcode.z.ai/remote/v4?sid=d_XXXXXXXXXXXXXXXXX&mid=<机器UUID>&name=<设备名>&app_version=3.18.2
 ```
 
-### 4.1 连接模型（Phase 0 需确认项）
-- [ ] 二维码解码后的内容格式（URL? 内嵌 token 的 scheme?）
-- [ ] 链接是走官方中继（`zcode.chatglm.site` 族域名）还是局域网直连
-- [ ] 握手鉴权方式（token 放 query / header / 首条消息）
-- [ ] 会话是否与桌面端账号绑定，多客户端并发是否有配额限制
-
-### 4.2 多会话与切换
-- 每个桌面客户端一个 `Session`（actor 隔离，互不干扰）
-- 会话列表常驻：状态点（🟢 已连接 / 🟡 连接中 / ⚪️ 已挂起）、最后一条消息预览、自定义别名（如"公司台式机"、"笔记本"）
-- 点击切换进入会话页；其余会话转入轻量挂起态
-- **iOS 后台现实约束**：App 退后台约 30 秒（`beginBackgroundTask` 可延至约 3 分钟）后连接被系统挂起。策略：回前台自动重连 + 会话状态可视化；推送通知需要服务端配合（远期）。
-
-### 4.3 扫码与链接输入
-- iOS 16+：`DataScannerViewController`（系统级扫码 UI，识别率高）
-- iOS 15 兼容：`AVCaptureSession` + 元数据输出
-- 辅助：相册识码（`VNDetectBarcodesRequest`）、剪贴板链接检测、手动输入纠错（自动补全 scheme）
-
-### 4.4 安全
-- token/配对凭据一律进 **Keychain**，不落 UserDefaults、不打日志
-- 仅允许 HTTPS/WSS，校验证书链；WebView 内禁用明文 HTTP（ATS）
-- 会话别名等非敏感数据用 SwiftData
-
----
-
-## 五、构建与分发（自签 IPA）
-
-构建链：**Xcode（macOS）→ Archive → 导出未签名 IPA → 用户自签**
-
-无 Mac 的替代方案：本仓库配置 GitHub Actions，用 `macos-latest` runner 云端自动构建未签名 IPA 并挂在 Release（public 仓库 Actions 免费）。
-
-| 自签方式 | 有效期 | 成本 | 适合 |
-|---|---|---|---|
-| 免费 Apple ID + Sideloadly/AltStore | 7 天，需定期续签 | 0 | 自用尝鲜 |
-| 付费开发者账号（$99/年） | 1 年 | 低 | **推荐日常自用** |
-| TrollStore | 永久（限特定 iOS 版本） | 0 | 设备版本兼容者 |
-| 企业证书/分发平台 | 看证书 | 有掉签风险 | 不建议依赖 |
-
----
-
-## 六、里程碑
-
-| 阶段 | 内容 | 产出 | 预估 |
-|---|---|---|---|
-| **M0 协议摸底** | 用官方网页流程抓包（Charles/mitmproxy）；收集二维码样本；确认 4.1 清单 | 《协议备忘录》 | 3~5 天 |
-| **M1 MVP** | 扫码 + 单连接 + WebView 会话页 + 首个可安装 IPA | 可自用 v0.1 | 1~2 周 |
-| **M2 多会话** | SessionManager、会话列表/切换、自动重连、Keychain、别名管理 | v0.2 | 1~2 周 |
-| **M3 原生化** | 高频操作（发消息/看任务/会话通知）走原生协议；体验打磨 | v0.3+ | 2~4 周 |
-| **M4 增强** | iPad 双栏、多桌面端聚合视图、（远期）推送通知 |  | 按需 |
-
----
-
-## 七、技术栈
-
-- **语言/UI**：Swift 5.9+，SwiftUI，最低支持 iOS 16
-- **扫码**：VisionKit `DataScannerViewController`（AVFoundation 兜底）
-- **连接**：`WKWebView`（M1/M2）→ `URLSessionWebSocketTask`（M3 逐步替换）
-- **存储**：Keychain（凭据）、SwiftData（会话元数据）
-- **构建**：Xcode 15+ / GitHub Actions（macOS runner）
-
----
-
-## 八、风险与对策
-
-| 风险 | 影响 | 对策 |
+| 参数 | 含义 | App 用途 |
 |---|---|---|
-| 官方协议升级 | 原生功能失效 | WebView 路线协议无关；原生化功能保持小步、可回退 |
-| iOS 后台挂起 | 退后台收不到消息 | 前台恢复即重连；重要消息通知列入 M4（需服务端支持） |
-| 中继并发限制 | 多客户端连不上 | M0 期间实测 2~3 个桌面端并发；必要时错峰重连 |
-| 免费 CA 7 天过期 | App 频繁掉签 | 引导使用付费证书；文档中提供续签脚本说明 |
-| 域名/接口变更 | 连接失败 | 域名收敛到配置常量，支持热更新提示 |
+| `sid` | 工作区/配对令牌（敏感） | 页面连接凭据，App 原样透传给官方页面 |
+| `mid` | 机器唯一 ID (UUID) | **多客户端去重键**：同 mid = 同一台设备，更新链接不新增会话 |
+| `name` | 设备名（如 AtlasOS） | 会话卡片显示名 |
+| `app_version` | 桌面端版本 | 诊断用 |
+
+### 2. 远程页面是官方托管的版本化 SPA
+
+- 页面地址：`https://zcode.z.ai/remote/v4/<app_version>/...`（React SPA，与桌面端同版本发布）
+- **必须登录**：打开链接先进入「Web Remote Control Sign In」，要求与电脑端 **同一账号**，分「中国 / 全球」区，走浏览器 OAuth 授权
+- 协议错误码族（页面 JS 内可见）：`remote-authentication-failed` / `remote-host-unreachable` / `remote-connection-timeout` / `remote-host-key-changed` 等，与桌面端 `remote-project` 错误映射一致 → **连接经官方云端中继**，手机任意网络可用，无局域网依赖
+
+### 3. 域名现状
+
+| 域名 | 状态 |
+|---|---|
+| `zcode.z.ai` | ✅ 正常（主域，`/remote/v4`、OAuth 均在此） |
+| `zcode.chatglm.site` | ❌ 本网络连接被重置（旧域/备用域，桌面端旧代码仍有引用） |
+| `api.z.ai` | ✅ 正常（301） |
+
+### 4. 对 App 的直接推论
+
+1. **不需要逆向连接协议**：登录后的连接握手、消息通道全部由官方页面完成。App 里每个会话 = 一个加载官方 `/remote/v4` 链接的 `WKWebView`，协议兼容性 100%，官方升级页面 App 零改动。
+2. **登录态可共享**：所有会话的 WebView 共用同一个 `WKWebsiteDataStore`，登录一次（OAuth 跳转一次）全部会话可用。
+3. **多客户端天然支持**：每个桌面客户端有自己的 sid/mid 链接；App 侧维护会话列表（mid 去重），多 WebView 并发互不干扰。
+4. 扫码只做一件事：从二维码解析出链接 → 存入会话列表。
 
 ---
 
-*本文档为可行性方案 v1，M0 结束后根据抓包结果修订协议细节。*
+## 二、架构
+
+```
+┌────────────────────────────────────────────────────┐
+│              ZCode Mobile (SwiftUI, iOS 16+)       │
+│                                                    │
+│  扫码 VisionKit DataScanner / 手动输入 / 剪贴板      │
+│        │ LinkParser 解析 sid/mid/name              │
+│        ▼                                           │
+│  SessionStore（mid 去重，持久化会话列表）             │
+│        │                                           │
+│  ┌─────▼──────────────────────────────────────┐    │
+│  │ NavigationStack 会话列表（名称/链接/删除）    │    │
+│  └─────┬──────────┬──────────┬────────────────┘    │
+│        ▼          ▼          ▼                     │
+│   SessionView  SessionView  SessionView  ←随时切换  │
+│   (WKWebView)  (WKWebView)  (WKWebView)            │
+│        └──────────┴──────────┘                     │
+│         共享 WKWebsiteDataStore（登录一次）           │
+└────────────────────────────────────────────────────┘
+                    │ HTTPS
+                    ▼
+        zcode.z.ai /remote/v4（官方页面+云端中继）
+                    │ WSS
+                    ▼
+            桌面客户端（AtlasOS…）
+```
+
+### 关键决策
+
+| 决策 | 理由 |
+|---|---|
+| WebView 承载官方页面而非逆向协议 | 页面要求账号登录 + OAuth，协议动态构造；WebView 路线协议无关、随官方自动升级 |
+| `mid` 作会话去重键 | 桌面端每次可能生成新 sid，mid 才是设备的稳定标识 |
+| 共享 data store | 避免每个会话重复登录 |
+| xcodegen 生成 Xcode 工程 | 仓库内无需提交 pbxproj，CI 用 brew 装 xcodegen 即可构建 |
+| CI 产出**未签名 IPA** | 签名交给用户自签（Sideloadly/AltStore/证书），仓库不持有任何凭据 |
+
+---
+
+## 三、已就绪的内容
+
+```
+ZCodeMobile/            App 源码（SwiftUI）
+  ZCodeMobileApp.swift      入口
+  Models.swift              RemoteSession + LinkParser（链接解析/去重键提取）
+  SessionStore.swift        会话持久化（mid 去重）
+  ContentView.swift         会话列表 + 扫码/手动输入入口
+  SessionView.swift         WKWebView 会话页（共享登录态）
+  ScanView.swift            VisionKit 扫码封装 + 相机权限处理
+project.yml             xcodegen 工程定义
+.github/workflows/build.yml   CI：生成工程 → 未签名归档 → 打包 IPA → 产物
+```
+
+## 四、CI 构建 IPA
+
+push 到 `main` 自动触发（也可在 Actions 页手动 `workflow_dispatch`）：
+
+1. macOS runner：`brew install xcodegen` → `xcodegen generate`
+2. `xcodebuild archive`（`CODE_SIGNING_ALLOWED=NO`，不签名）
+3. `.app` 打包为 `Payload/…ipa` 结构 → **未签名 IPA**
+4. 上传为 Actions Artifact；打 tag（`v0.1.0` 等）时自动附到 GitHub Release
+
+> macOS runner 限额：public 仓库免费；本仓库已设为 public。
+
+## 五、安装到 iPhone（自签）
+
+下载 Actions/Release 里的 IPA 后任选：
+
+| 方式 | 说明 |
+|---|---|
+| **Sideloadly / AltStore** + 免费 Apple ID | 最简单，7 天有效期需续签 |
+| 付费开发者账号签名 | 1 年有效期，日常自用推荐 |
+| esign 等自签工具 + 证书 | 有证书资源时用 |
+
+## 六、路线图（按序推进，无需等待）
+
+- [x] 协议实测：链接格式 / 登录墙 / 中继确认（本文档第一节）
+- [x] 仓库脚手架 + CI（本仓库已具备）
+- [ ] **首个绿色构建**：修复 CI 中暴露的编译问题，拿到 v0.1 IPA
+- [ ] 真机自测：登录一次 → 加载会话 → 验证远控可用
+- [ ] 多会话切换打磨：会话保活策略、退后台重连、WebView 内存优化（按需挂起）
+- [ ] 增值功能：剪贴板自动识别链接、会话别名编辑、深色模式适配、iPad 双栏
+- [ ] （远期）高频操作原生化：抓一次登录态的 WS 流量后评估
+
+## 七、风险与对策
+
+| 风险 | 对策 |
+|---|---|
+| 登录 OAuth 在 WebView 内的兼容性（弹窗/跳转） | WKWebView 处理 `window.open` 回调；不行则引导用系统 Safari 登录后复制回跳链接（M1 阶段实测） |
+| 官方页面更新（版本路径变化） | 页面 URL 以链接为准，App 不硬编码版本号；解析只认 `/remote/` 路径 |
+| iOS 后台挂起连接 | 回前台刷新页面 + 会话状态可视化；官方页面自带重连逻辑 |
+| sid 泄漏风险 | 链接等同远控凭据：App 内不明文展示 sid、不支持导出，删除会话即清除 |
+| GitHub 网络不稳 | CI 在 GitHub 侧构建，不受本地网络影响 |
+
+---
+
+*本方案基于 2026-11-16 对 ZCode 3.18.2 桌面端与官方远控页面的实测，取代 v1 中的假设性内容。*

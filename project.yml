@@ -1,0 +1,39 @@
+name: ZCodeMobile
+options:
+  bundleIdPrefix: com.deltrivx
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+targets:
+  ZCodeMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: ZCodeMobile
+    info:
+      path: ZCodeMobile/Info.plist
+      properties:
+        CFBundleDisplayName: ZCode Mobile
+        UILaunchScreen: {}
+        NSCameraUsageDescription: 扫描 ZCode 桌面端的移动远程控制二维码
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.deltrivx.zcodemobile
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+schemes:
+  ZCodeMobile:
+    build:
+      targets:
+        ZCodeMobile: all
+    run:
+      config: Debug
+    archive:
+      config: Release
