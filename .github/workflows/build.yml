@@ -5,9 +5,14 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: build-main
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-13
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
